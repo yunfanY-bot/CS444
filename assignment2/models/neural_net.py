@@ -1,6 +1,7 @@
 """Neural network model."""
 
 from typing import Sequence
+from unittest import result
 
 import numpy as np
 
@@ -15,11 +16,11 @@ class NeuralNetwork:
     a softmax, and become the scores for each class."""
 
     def __init__(
-        self,
-        input_size: int,
-        hidden_sizes: Sequence[int],
-        output_size: int,
-        num_layers: int,
+            self,
+            input_size: int,
+            hidden_sizes: Sequence[int],
+            output_size: int,
+            num_layers: int,
     ):
         """Initialize the model. Weights are initialized to small random values
         and biases are initialized to zero. Weights and biases are stored in
@@ -37,6 +38,11 @@ class NeuralNetwork:
             output_size: The number of classes C
             num_layers: Number of fully connected layers in the neural network
         """
+        self.v = None
+        self.m = None
+        self.epsilon = None
+        self.beta_2 = None
+        self.beta_1 = None
         self.input_size = input_size
         self.hidden_sizes = hidden_sizes
         self.output_size = output_size
@@ -62,7 +68,7 @@ class NeuralNetwork:
             the output
         """
         # TODO: implement me
-        return
+        return X @ W + b
 
     def relu(self, X: np.ndarray) -> np.ndarray:
         """Rectified Linear Unit (ReLU).
@@ -72,7 +78,7 @@ class NeuralNetwork:
             the output
         """
         # TODO: implement me
-        return
+        return np.maximum(0, X)
 
     def relu_grad(self, X: np.ndarray) -> np.ndarray:
         """Gradient of Rectified Linear Unit (ReLU).
@@ -82,7 +88,7 @@ class NeuralNetwork:
             the output data
         """
         # TODO: implement me
-        return
+        return X > 0
 
     def softmax(self, X: np.ndarray) -> np.ndarray:
         """The softmax function.
@@ -92,7 +98,10 @@ class NeuralNetwork:
             the output
         """
         # TODO: implement me
-        return
+
+        X = X - np.max(X, axis=1).reshape(X.shape[0], -1)
+        X = np.exp(X)
+        return X / np.sum(X, axis=1).reshape(X.shape[0], -1)
 
     def forward(self, X: np.ndarray) -> np.ndarray:
         """Compute the scores for each class for all of the data samples.
@@ -109,7 +118,14 @@ class NeuralNetwork:
         # self.outputs as it will be used during back-propagation. You can use
         # the same keys as self.params. You can use functions like
         # self.linear, self.relu, and self.softmax in here.
-        return
+        self.outputs[0] = X
+        for i in range(1, self.num_layers):
+            self.outputs[i] = self.linear(self.params['W' + str(i)], self.outputs[i - 1], self.params['b' + str(i)])
+            self.outputs[i] = self.relu(self.outputs[i])
+        self.outputs[self.num_layers] = self.softmax(
+            self.linear(self.params['W' + str(self.num_layers)], self.outputs[self.num_layers - 1],
+                        self.params['b' + str(self.num_layers)]))
+        return self.outputs[self.num_layers]
 
     def backward(self, y: np.ndarray, reg: float = 0.0) -> float:
         """Perform back-propagation and compute the gradients and losses.
@@ -127,15 +143,33 @@ class NeuralNetwork:
         # parameter and during numerical gradient checks. You can use the same
         # keys as self.params. You can add functions like self.linear_grad,
         # self.relu_grad, and self.softmax_grad if it helps organize your code.
-        return
+
+        m = y.shape[0]
+        p = np.copy(self.outputs[self.num_layers])
+        loss = np.sum(-np.log(p[range(m), y])) / m
+        for i in range(1, self.num_layers + 1):
+            loss += np.sum(self.params["W" + str(i)] * self.params["W" + str(i)]) * reg
+        p[range(m), y] -= 1
+        grad = p / m
+
+        self.gradients['L' + str(self.num_layers)] = grad
+
+        for i in reversed(range(1, self.num_layers + 1)):
+            L_grad = self.relu_grad(self.outputs[i]) * self.gradients['L' + str(i)]
+            self.gradients['L' + str(i - 1)] = L_grad @ np.transpose(self.params['W' + str(i)])
+            self.gradients['W' + str(i)] = 2 * reg * self.params['W' + str(i)] + \
+                                           np.transpose(self.outputs[i - 1]) @ L_grad
+            self.gradients['b' + str(i)] = np.sum(L_grad, axis=0)
+
+        return loss
 
     def update(
-        self,
-        lr: float = 0.001,
-        b1: float = 0.9,
-        b2: float = 0.999,
-        eps: float = 1e-8,
-        opt: str = "SGD",
+            self,
+            lr: float = 0.001,
+            b1: float = 0.9,
+            b2: float = 0.999,
+            eps: float = 1e-8,
+            opt: str = "SGD",
     ):
         """Update the parameters of the model using the previously calculated
         gradients.
@@ -148,4 +182,26 @@ class NeuralNetwork:
         """
         # TODO: implement me. You'll want to add an if-statement that can
         # handle updates for both SGD and Adam depending on the value of opt.
+        if opt == "ADAM":
+            self.beta_1 = b1
+            self.beta_2 = b2
+            self.epsilon = eps
+            self.m = {}
+            self.v = {}
+
+            for i in range(1, self.num_layers + 1):
+                self.m["m" + str(i)] = np.zeros_like(self.params['W' + str(i)])
+                self.v["v" + str(i)] = np.zeros_like(self.params['W' + str(i)])
+
+            for i in range(1, self.num_layers + 1):
+                self.m["m" + str(i)] = b1 * self.m["m" + str(i)] + (1.0 - b1) * self.gradients['W' + str(i)]
+                self.v["v" + str(i)] = b2 * self.v["v" + str(i)] + (1.0 - b2) * (self.gradients['W' + str(i)] ** 2)
+
+                new_grad = self.m["m" + str(i)] * lr / (np.sqrt(self.v["v" + str(i)]) + eps)
+                self.params['W' + str(i)] -= lr * new_grad
+                self.params['b' + str(i)] -= lr * self.gradients['b' + str(i)]
+        else:
+            for i in range(1, self.num_layers + 1):
+                self.params['W' + str(i)] -= lr * self.gradients['W' + str(i)]
+                self.params['b' + str(i)] -= lr * self.gradients['b' + str(i)]
         pass
